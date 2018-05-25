@@ -52,8 +52,6 @@ verifyBlockHeader (BlockHeaderMain bhm)  = verifyMainBlockHeader bhm
 -- | Verify a Block in isolation.
 verifyBlock
     :: ( MonadError Text m
-       , Bi BlockHeader
-       , Bi MainProof
        , HasProtocolConstants
        , HasProtocolMagic
        )

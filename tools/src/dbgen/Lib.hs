@@ -39,6 +39,7 @@ import           Pos.Wallet.Web.ClientTypes (AccountId (..), CAccount (..), CAcc
 import           Pos.Wallet.Web.ClientTypes.Instances ()
 import           Pos.Wallet.Web.Methods.Logic (getAccounts, newAccountIncludeUnready, newAddress)
 import           Pos.Wallet.Web.Methods.Restore (newWallet)
+import           Pos.Wallet.Web.Mode (WalletWebMode)
 import           Pos.Wallet.Web.State.State (askWalletDB, getWalletSnapshot, getWalletUtxo,
                                              insertIntoHistoryCache, setWalletUtxo,
                                              updateWalletBalancesAndUtxo)
@@ -415,7 +416,7 @@ genWallet walletNum = do
 
 
 -- | Generates a new 'BackupPhrase'.
-newRandomMnemonic :: UberMonad BackupPhrase
+newRandomMnemonic :: WalletWebMode BackupPhrase
 newRandomMnemonic = do
 
     -- The size 16 should give you 12 words after bip39 encoding.
