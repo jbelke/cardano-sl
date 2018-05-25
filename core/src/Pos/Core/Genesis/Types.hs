@@ -174,7 +174,7 @@ newtype GenesisNonAvvmBalances = GenesisNonAvvmBalances
     { getGenesisNonAvvmBalances :: HashMap Address Coin
     } deriving (Show, Eq)
 
-instance (Hashable Address, Buildable Address) =>
+instance (Hashable Address) =>
          Buildable GenesisNonAvvmBalances where
     build (GenesisNonAvvmBalances m) =
         bprint ("GenesisNonAvvmBalances: " %mapJson) m
