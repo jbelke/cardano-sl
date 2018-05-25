@@ -31,19 +31,19 @@ module Pos.Util.Log
 import           Universum
 
 import           Control.Monad.Base (MonadBase)
-import           Control.Monad.Morph (MFunctor(..))
+import           Control.Monad.Morph (MFunctor (..))
 import           Control.Monad.Writer (WriterT (..))
 
-import           Pos.Util.LoggerConfig (LoggerConfig(..), loadLogConfig, retrieveLogFiles)
-import           Pos.Util.Log.Severity (Severity(..))
+import           Pos.Util.Log.Scribes (mkStdoutScribe)
+import           Pos.Util.Log.Severity (Severity (..))
+import           Pos.Util.LoggerConfig (LoggerConfig (..), loadLogConfig, retrieveLogFiles)
 
-import           Data.Text (Text{-, unpack-})
 import           Data.Text.Lazy.Builder
 
 import qualified Pos.Util.Log.Internal as Internal
 
-import qualified Katip                      as K
-import qualified Katip.Core                 as KC
+import qualified Katip as K
+import qualified Katip.Core as KC
 
 
 -- | alias - pretend not to depend on katip
@@ -153,8 +153,10 @@ setupLogging minSev name = do
     return le
 -}
 setupLogging :: LoggerConfig -> IO ()
-setupLogging = Internal.setConfig
-
+setupLogging lc = do
+    let minSev = Debug
+    hScribe <- mkStdoutScribe (Internal.sev2klog minSev) K.V0
+    Internal.setConfig hScribe "stdout" lc
 
 -- | provide logging in IO
 usingLoggerName :: LoggerName -> LogContextT IO a -> IO a
@@ -201,4 +203,3 @@ test4 = do
     usingLoggerName Info "testtest" $ do
         logWarning "This is a warning!"
 -}
-

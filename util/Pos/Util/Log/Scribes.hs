@@ -1,26 +1,26 @@
+module Pos.Util.Log.Scribes
+    ( mkStdoutScribe
+    , mkDevNullScribe
+    ) where
 
-module Pos.Util.Log.StdoutScribe
-       ( mkStdoutScribe
-       ) where
-
-import           Universum hiding (fromString) --, newMVar, takeMVar, putMVar)
+import           Universum hiding (fromString)
 
 import           Data.Text.Lazy.Builder
-import qualified Data.Text.Lazy.IO          as T
-import           System.IO
-import           System.IO.Unsafe (unsafePerformIO)
---import           Control.Concurrent.MVar (newMVar, takeMVar, putMVar)
-
+import qualified Data.Text.Lazy.IO as T
 import           Katip.Core
-import           Katip.Scribes.Handle (getKeys, brackets)
 import           Katip.Format.Time (formatAsIso8601)
+import           Katip.Scribes.Handle (brackets, getKeys)
+import           System.IO (BufferMode (LineBuffering), IOMode (WriteMode), hFlush, hSetBuffering,
+                            stdout)
+import           System.IO.Unsafe (unsafePerformIO)
 
+import           Pos.Util.Log.Internal (modifyLinesLogged)
 
 -------------------------------------------------------------------------------
 -- | create a katip scribe for stdout logging
 --   (following default scribe in katip source code)
 
--- | global lock for this scribe
+-- | global lock for stdout Scribe
 {-# NOINLINE lock #-}
 lock :: MVar ()
 lock = unsafePerformIO $ newMVar ()
@@ -31,9 +31,21 @@ mkStdoutScribe s v = do
         colorize = True
     hSetBuffering h LineBuffering
     let logger :: forall a. LogItem a => Item a -> IO ()
-        logger i@Item{..} = do
-          when (permitItem s i) $ bracket_ (takeMVar lock) (putMVar lock ()) $
-            T.hPutStrLn h $! toLazyText $ formatItem colorize v i
+        logger item = do
+          when (permitItem s item) $ bracket_ (takeMVar lock) (putMVar lock ()) $
+            T.hPutStrLn h $! toLazyText $ formatItem colorize v item
+    pure $ Scribe logger (hFlush h)
+
+-- |Scribe that outputs to /dev/null without locking
+mkDevNullScribe :: Severity -> Verbosity -> IO Scribe
+mkDevNullScribe s v = do
+    h <- openFile "/dev/null" WriteMode
+    let colorize = True
+    hSetBuffering h LineBuffering
+    let logger :: forall a. LogItem a => Item a -> IO ()
+        logger item = do
+          when (permitItem s item) $ modifyLinesLogged succ
+            >> (T.hPutStrLn h $! toLazyText $ formatItem colorize v item)
     pure $ Scribe logger (hFlush h)
 
 -- | format a log item with subsecond precision (ISO 8601)
@@ -67,7 +79,3 @@ formatItem withColor verb Item{..} =
     colorize c s
       | withColor = "\ESC["<> c <> "m" <> s <> "\ESC[0m"
       | otherwise = s
-
-
-
-
