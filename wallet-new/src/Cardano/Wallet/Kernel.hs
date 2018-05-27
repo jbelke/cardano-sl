@@ -34,7 +34,6 @@ import           Universum hiding (State)
 import           Control.Lens.TH
 import           Control.Concurrent.MVar(modifyMVar_, withMVar)
 import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
 
 import           Formatting (sformat, build)
 
@@ -46,14 +45,13 @@ import           Data.Acid.Advanced (query', update')
 
 import           Cardano.Wallet.Kernel.Diffusion (WalletDiffusion (..))
 import           Cardano.Wallet.Kernel.PrefilterTx (PrefilteredBlock (..)
-                                                  , ourUtxo, prefilterBlock)
+                                                  , utxoForAccount, prefilterUtxo, prefilterBlock)
 import           Cardano.Wallet.Kernel.Types(WalletId (..), WalletESKs, accountToWalletId)
 
 import           Cardano.Wallet.Kernel.DB.HdWallet
 import           Cardano.Wallet.Kernel.DB.Resolved (ResolvedBlock)
 import           Cardano.Wallet.Kernel.DB.AcidState (DB, defDB
-                                                   , CreateHdRoot(..)
-                                                   , CreateHdAccount (..)
+                                                   , CreateHdWallet (..)
                                                    , ApplyBlock (..)
                                                    , NewPending (..)
                                                    , ReadHdAccount (..))
@@ -61,7 +59,6 @@ import           Cardano.Wallet.Kernel.DB.BlockMeta (BlockMeta (..))
 import           Cardano.Wallet.Kernel.DB.Spec as Spec
 import qualified Cardano.Wallet.Kernel.DB.Spec.Util as Spec
 import qualified Cardano.Wallet.Kernel.DB.HdWallet as HD
-import qualified Cardano.Wallet.Kernel.DB.HdWallet.Create as HD
 import           Cardano.Wallet.Kernel.DB.InDb
 
 import           Pos.Core (HasConfiguration, TxAux (..), AddressHash, Coin, unsafeAddCoin, subCoin)
@@ -151,71 +148,34 @@ init PassiveWallet{..} = _walletLogMessage Info "Passive Wallet kernel initializ
   Wallet Creation
 -------------------------------------------------------------------------------}
 
-createHdRoot :: AcidState DB
-             -> HD.HdRootId
-             -> HD.WalletName
-             -> IO (Either HD.CreateHdRootError ())
-createHdRoot db rootId name
-    = update' db $ CreateHdRoot rootId name hasPass assurance created
-    where
-      hasPass     = HD.NoSpendingPassword
-      assurance   = HD.AssuranceLevelNormal
-      created     = error "TODO created" -- TODO created <- InDb . Timestamp <$> getCurrentTime
-
--- | Create an HdAccount for the given HdRoot.
---
---   Initialise checkpoint Utxo and UtxoBalance.
---   NOTE: The given Utxo must be prefiltered.
-createHdAccount :: AcidState DB
-                -> HD.HdRootId
-                -> HD.AccountName
-                -> Utxo
-                -> IO (Either HD.CreateHdAccountError HD.HdAccountId)
-createHdAccount db rootId name utxo
-    = update' db $ CreateHdAccount rootId name (initCheckpoint utxo)
-    where
-        initCheckpoint :: Utxo -> Spec.Checkpoint
-        initCheckpoint utxo'
-            = Spec.Checkpoint {
-               _checkpointUtxo        = InDb utxo'
-             , _checkpointUtxoBalance = InDb $ Spec.balance utxo'
-             , _checkpointExpected    = InDb Map.empty
-             , _checkpointPending     = Spec.Pending . InDb $ Map.empty
-             , _checkpointBlockMeta   = BlockMeta . InDb $ Map.empty
-             }
-
 -- | Creates an HD wallet with randomly generated addresses.
 --
--- Adds an HdRoot along with a sub HdAccount. The given ESK is indexed by
--- the newly created WalletId.
+-- Adds an HdRoot along with HdAccounts, which are discovered during prefiltering of utxo.
+-- It is possible that no Accounts are added for a wallet (when prefiltering
+-- returns no matching utxo for any Accounts).
+-- The given ESK is indexed by generated WalletId.
 createWalletHdRnd :: PassiveWallet
                   -> HD.WalletName
-                  -> HD.AccountName
                   -> (AddressHash PublicKey, EncryptedSecretKey)
                   -> Utxo
-                  -> IO HdAccountId
-createWalletHdRnd pw@PassiveWallet{..} walletName accountName (pk, esk) utxo = do
-    hdRoot <- createHdRoot _wallets rootId walletName
-    case hdRoot of
-        Left e  -> fail' e
+                  -> IO [HdAccountId]
+createWalletHdRnd pw@PassiveWallet{..} walletName  (pk, esk) utxo = do
+    let utxoByAccount = prefilterUtxo rootId esk utxo
+    res <- update' _wallets $ CreateHdWallet rootId walletName utxoByAccount
+    case res of
+        Left e' -> fail' e'
         Right _ -> do
-            res <- createHdAccount _wallets rootId accountName utxo
-            case res of
-                Left e' -> fail' e'
-                Right accountId -> do
-                    insertWalletESK pw (WalletIdHdRnd rootId) esk
-                    return accountId
-  where
-      rootId = HD.HdRootId . InDb $ pk
+            -- TODO putText $ sformat ("@@@@@@@"%build) (Map.size $ utxoByAccount)
+            insertWalletESK pw (WalletIdHdRnd rootId) esk -- TODO what if this fails?
+            return $ Map.keys utxoByAccount
+    where
+        rootId = HD.HdRootId . InDb $ pk
 
 {-------------------------------------------------------------------------------
   Passive Wallet API implementation: applyBlock, available, change, balances
 -------------------------------------------------------------------------------}
 
 -- | Prefilter a resolved block for representing all ESKs in the PassiveWallet
---
---   TODO: Extend PrefilteredBlock to record the AccountId matched by the ESK.
---         (currently just uses the first wallet ESK for prefiltering)
 prefilterBlock' :: HasConfiguration
                 => PassiveWallet
                 -> ResolvedBlock
@@ -236,12 +196,12 @@ applyBlock :: HasConfiguration
            -> IO ()
 applyBlock pw@PassiveWallet{..} b
     = do
-        prefBlock <- prefilterBlock' pw b
+        blocksByAccount <- prefilterBlock' pw b
         -- TODO BlockMeta as arg to applyBlock (use checkPoint ^. currentBMeta)
         let blockMeta = BlockMeta . InDb $ Map.empty
 
         -- apply block to all Accounts in all Wallets
-        void $ update' _wallets $ ApplyBlock (prefBlock, blockMeta)
+        void $ update' _wallets $ ApplyBlock (blocksByAccount, blockMeta)
 
 -- | Apply the ResolvedBlocks, one at a time, to all wallets in the PassiveWallet
 applyBlocks :: (HasConfiguration, Container (f ResolvedBlock))
@@ -322,7 +282,7 @@ accountChange pw accountId = do
     let pending = checkpoints ^. Spec.currentPendingTxs
 
     esk <- findWalletESK pw (accountToWalletId accountId)
-    return $ ourUtxo accountId esk (Spec.pendingUtxo pending)
+    return $ utxoForAccount accountId esk (Spec.pendingUtxo pending)
 
 accountAvailableBalance :: PassiveWallet -> HdAccountId -> IO Coin
 accountAvailableBalance pw accountId = do

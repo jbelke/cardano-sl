@@ -5,7 +5,8 @@
 module Cardano.Wallet.Kernel.PrefilterTx
        ( PrefilteredBlock(..)
        , prefilterBlock
-       , ourUtxo
+       , utxoForAccount
+       , prefilterUtxo
        ) where
 
 import           Universum
@@ -87,7 +88,7 @@ prefilterTx :: WalletKey
             -> (Map HdAccountId (Set TxIn), Map HdAccountId Utxo)
 prefilterTx wKey tx = (
       ourInputs wKey (toList (tx ^. rtxInputs  . fromDb))
-    , ourUtxo_  wKey (tx ^. rtxOutputs . fromDb)
+    , ourUtxo  wKey (tx ^. rtxOutputs . fromDb)
     )
 
 ourInputs :: WalletKey
@@ -99,19 +100,24 @@ ourInputs wKey inps = Map.fromListWith Set.union
     where
         f (accountId, (txIn, _txOut)) = (accountId, Set.singleton txIn)
 
-ourUtxo :: HdAccountId -> EncryptedSecretKey -> Utxo -> Utxo
-ourUtxo accountId esk utxo
+utxoForAccount :: HdAccountId -> EncryptedSecretKey -> Utxo -> Utxo
+utxoForAccount accountId esk utxo
     = fromMaybe Map.empty $ Map.lookup accountId ourUtxo'
     where
         wid = accountToWalletId accountId
-        ourUtxo' = ourUtxo_ (wid, eskToWalletDecrCredentials esk) utxo
+        ourUtxo' = ourUtxo (wid, eskToWalletDecrCredentials esk) utxo
 
-ourUtxo_ :: WalletKey -> Utxo -> Map HdAccountId Utxo
-ourUtxo_ wid utxo = Map.fromListWith Map.union
+ourUtxo :: WalletKey -> Utxo -> Map HdAccountId Utxo
+ourUtxo wid utxo = Map.fromListWith Map.union
                     $ map f
                     $ ourResolvedTxPairs wid (Map.toList utxo)
     where
         f (accountId, (txIn, txOut)) = (accountId, Map.singleton txIn txOut)
+
+prefilterUtxo :: HdRootId -> EncryptedSecretKey -> Utxo -> Map HdAccountId Utxo
+prefilterUtxo rootId esk utxo = ourUtxo wKey utxo
+    where
+        wKey = (WalletIdHdRnd rootId, eskToWalletDecrCredentials esk)
 
 ourResolvedTxPairs :: WalletKey
                    -> [(TxIn, TxOutAux)]
@@ -130,9 +136,9 @@ ours (wid,wdc) selectAddr rtxs
     where f (addr,meta) = (addr, toAccountId wid meta)
 
           toAccountId :: WalletId -> WAddressMeta -> HdAccountId
-          toAccountId (WalletIdHdRnd rootId) _meta = accountId
+          toAccountId (WalletIdHdRnd rootId) meta' = accountId
               where
-                  accountIx = HdAccountIx 0 -- TODO (_wamAccountIndex meta)
+                  accountIx = HdAccountIx (_wamAccountIndex meta')
                   accountId = HdAccountId rootId accountIx
 
 {-------------------------------------------------------------------------------

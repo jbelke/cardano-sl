@@ -158,13 +158,15 @@ equivalentT activeWallet (pk,esk) = \mkWallet w ->
                 -> Utxo
                 -> TranslateT (EquivalenceViolation h) m HD.HdAccountId
     walletBootT ctxt utxo = do
-
-        accountId <- liftIO $ Kernel.createWalletHdRnd passiveWallet walletName accountName (pk,esk) utxo
-        checkWalletState ctxt accountId
-        return accountId
+        accountIds <- liftIO $ Kernel.createWalletHdRnd passiveWallet walletName (pk,esk) utxo
+        -- this works because the utxo generated for these tests generate transactions for a single Account only
+        -- (the utxo for tests is translated from DSL utxo, which does not model Wallet Accounts at all)
+        case head accountIds of
+            Nothing        -> error "ERROR: no accountIds generated for the given Utxo"
+            Just accountId -> checkWalletState ctxt accountId >> return accountId
         where
             walletName  = HD.WalletName "(test wallet)"
-            accountName = HD.AccountName "(test account)"
+            _accountName = HD.AccountName "(test account)"
 
     walletApplyBlockT :: InductiveCtxt h
                       -> HD.HdAccountId

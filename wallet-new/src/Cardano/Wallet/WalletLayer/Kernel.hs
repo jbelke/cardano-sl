@@ -52,7 +52,7 @@ bracketPassiveWallet logFunction f =
                                     "become",  "junk",     "kingdom", "flee" ]
                      }
             Right (esk, _) = safeKeysFromPhrase emptyPassphrase backup
-        Kernel.createWalletHdRnd w walletName accountName (pk, esk) Map.empty
+        Kernel.createWalletHdRnd w walletName (pk, esk) Map.empty
 
       f (passiveWalletLayer w invoke)
 
@@ -60,7 +60,6 @@ bracketPassiveWallet logFunction f =
     pk = error "TODO obtain [AddressHash PublicKey] from safeKeysFromPhrase -> snd -> toPublicKey -> hash ..."
     -- TODO proper defaults
     walletName  = HD.WalletName "(new wallet)"
-    accountName = HD.AccountName "(new account)"
 
     -- | TODO(ks): Currently not implemented!
     passiveWalletLayer _wallet invoke =

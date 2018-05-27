@@ -4,6 +4,7 @@ module Cardano.Wallet.Kernel.DB.HdWallet.Create (
     CreateHdRootError(..)
   , CreateHdAccountError(..)
   , CreateHdAddressError(..)
+  , CreateHdWalletError (..)
     -- * Functions
   , createHdRoot
   , createHdAccount
@@ -38,7 +39,7 @@ data CreateHdRootError =
 -- | Errors thrown by 'createHdAccount'
 data CreateHdAccountError =
     -- | The specified wallet could not be found
-    CreateHdAccountUnknown UnknownHdRoot
+    CreateHdAccountUnknownRoot UnknownHdRoot
 
 -- | Errors thrown by 'createHdAddress'
 data CreateHdAddressError =
@@ -48,9 +49,18 @@ data CreateHdAddressError =
     -- | Address already used
   | CreateHdAddressExists HdAddressId
 
+-- | Errors thrown by 'createHdWallet'
+data CreateHdWalletError =
+    -- | Could not create HdRoot
+    CreateHdWalletRootFailed CreateHdRootError
+
+    -- | Could not create an HdAccount
+  | CreateHdWalletAccountFailed CreateHdAccountError
+
 deriveSafeCopy 1 'base ''CreateHdRootError
 deriveSafeCopy 1 'base ''CreateHdAccountError
 deriveSafeCopy 1 'base ''CreateHdAddressError
+deriveSafeCopy 1 'base ''CreateHdWalletError
 
 {-------------------------------------------------------------------------------
   CREATE
@@ -64,8 +74,6 @@ deriveSafeCopy 1 'base ''CreateHdAddressError
 -- 'BackupPhrase' and (optionally) the 'SpendingPassword' to create a new key
 -- add it to the key storage. This is important, beacuse these are secret
 -- bits of information that should never end up in the DB log.
---
--- NOTE: The wallet initially has no accounts (see 'createHdAccount').
 createHdRoot :: HdRootId
              -> WalletName
              -> HasSpendingPassword
@@ -94,26 +102,27 @@ createHdRoot rootId name hasPass assurance created =
 --
 -- TODO: If any key derivation is happening when creating accounts, should we
 -- store a public key or an address or something?
-createHdAccount :: HdRootId
-                -> AccountName
+createHdAccount :: HdAccountId
                 -> Checkpoint
-                -> Update' HdWallets CreateHdAccountError HdAccountId
-createHdAccount rootId name checkpoint = do
+                -> Update' HdWallets CreateHdAccountError ()
+createHdAccount accountId checkpoint = do
     -- Check that the root ID exists
-    zoomHdRootId CreateHdAccountUnknown rootId $
+    zoomHdRootId CreateHdAccountUnknownRoot rootId $
       return ()
-    -- Create the new account
+
     zoom hdWalletsAccounts $ do
-      numAccounts <- gets $ IxSet.size . IxSet.getEQ rootId
-      let accIx = HdAccountIx (fromIntegral numAccounts)
-          accId = HdAccountId rootId accIx
-      at accId .= Just (hdAccount accId)
-      return accId
+        exists <- gets $ IxSet.member accountId
+        unless exists $ -- TODO add callback function for accountExists (to enable caller to throw Err)
+            at accountId .= Just hdAccount
+        return ()
   where
-    hdAccount :: HdAccountId -> HdAccount
-    hdAccount accId = HdAccount {
-          _hdAccountId          = accId
-        , _hdAccountName        = name
+    rootId = accountId ^. hdAccountIdParent
+    -- TODO consider proper AccountName default
+    defName = AccountName $ sformat ("Account: "%build) (accountId ^. hdAccountIdIx)
+
+    hdAccount = HdAccount {
+          _hdAccountId          = accountId
+        , _hdAccountName        = defName
         , _hdAccountCheckpoints = checkpoint :| []
         }
 
@@ -155,6 +164,9 @@ instance Buildable CreateHdRootError where
     build (CreateHdRootExists rootId)
         = bprint ("CreateHdRootError::CreateHdRootExists "%build) rootId
 
-instance Buildable CreateHdAccountError where 
-    build (CreateHdAccountUnknown (UnknownHdRoot rootId))
-        = bprint ("CreateHdAccountError::CreateHdAccountUnknown "%build) rootId
+instance Buildable CreateHdAccountError where
+    build (CreateHdAccountUnknownRoot (UnknownHdRoot rootId))
+        = bprint ("CreateHdAccountError::CreateHdAccountUnknownRoot "%build) rootId
+
+instance Buildable CreateHdWalletError where
+    build = bprint ("CreateHdWalletError::"%build)
